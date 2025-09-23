@@ -21,14 +21,15 @@ CHATS = {
 STATS_FILE = "weekly_stats.json"
 PREV_FILE = "previous_week.json"
 
-# ================= Инициализация =================
+# ================================
+
 vk = VkApi(token=VK_TOKEN)
 vk_api = vk.get_api()
 previous_members = {}
 
 app = Flask(__name__)
 
-# ================= Функции =====================
+# ================= Функции ===================
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"})
@@ -63,14 +64,18 @@ def save_stats(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-# ================= Сбор статистики сообщений =====
+# ================= Сбор статистики сообщений ============
 def update_stats_messages(chat_id, chat_name):
     stats = load_stats()
     try:
         offset = 0
         while True:
             history = vk_api.messages.getHistory(peer_id=2000000000 + chat_id, count=200, offset=offset)
-            messages = history.get("items", []) if isinstance(history, dict) else []
+            if isinstance(history, dict):
+                messages = history.get("items", [])
+            else:
+                messages = []
+
             if not messages:
                 break
 
@@ -93,7 +98,7 @@ def update_stats_messages(chat_id, chat_name):
         save_stats(stats)
 
 
-# ================= Обработка реакций ==============
+# ================= Обработка реакций ============
 def handle_reaction_event(chat_name, user_id, reaction, event_type):
     stats = load_stats()
     chat_stats = stats.get(chat_name, {"messages": {}, "reactions": {}, "totals": {"messages": 0, "reactions": 0}})
@@ -112,7 +117,7 @@ def handle_reaction_event(chat_name, user_id, reaction, event_type):
     save_stats(stats)
 
 
-# ================= Формирование отчета ==============
+# ================= Формирование отчета ============
 def make_weekly_report(reset=True):
     stats = load_stats()
     try:
@@ -129,21 +134,21 @@ def make_weekly_report(reset=True):
         msg += f"Всего сообщений: {chat_stats['totals']['messages']}\n"
         msg += f"Всего реакций: {chat_stats['totals']['reactions']}\n"
 
-        # Топ сообщений
+        # топ по сообщениям
         top_msgs = sorted(chat_stats["messages"].items(), key=lambda x: x[1], reverse=True)[:10]
-        msg += "<b>Топ-10 сообщений:</b>\n"
+        msg += "<b>Топ-10 по сообщениям:</b>\n"
         for uid, count in top_msgs:
             msg += f"- {get_user_name(uid)} — {count}\n"
 
-        # Топ реакций
+        # топ по реакциям
         total_reacts_by_user = {uid: sum(emoji_counts.values()) for uid, emoji_counts in chat_stats["reactions"].items()}
         top_reacts = sorted(total_reacts_by_user.items(), key=lambda x: x[1], reverse=True)[:10]
-        msg += "<b>Топ-10 реакций:</b>\n"
+        msg += "<b>Топ-10 по реакциям:</b>\n"
         for uid, count in top_reacts:
             breakdown = ", ".join([f"{emoji} {c}" for emoji, c in chat_stats["reactions"][uid].items()])
             msg += f"- {get_user_name(uid)} — {count} ({breakdown})\n"
 
-        # Сравнение с прошлым
+        # сравнение с прошлым
         prev_msgs = prev.get(chat_name, {}).get("totals", {}).get("messages", 0)
         prev_reacts = prev.get(chat_name, {}).get("totals", {}).get("reactions", 0)
         delta_msgs = ((chat_stats["totals"]["messages"] - prev_msgs) / prev_msgs * 100) if prev_msgs > 0 else 0
@@ -162,13 +167,14 @@ def make_weekly_report(reset=True):
         print("Ошибка при отправке отчёта:", e)
 
 
-# ================= Основной цикл =================
+# ================= Основной цикл ====================
+last_report_time = None
 def bot_loop():
+    global last_report_time
     for chat_name, chat_id in CHATS.items():
         previous_members[chat_name] = get_chat_members(chat_id)
     print("Бот запущен.")
 
-    last_report_time = None
     while True:
         try:
             for chat_name, chat_id in CHATS.items():
@@ -190,12 +196,14 @@ def bot_loop():
 
                 previous_members[chat_name] = current_members
 
+                # обновляем статистику сообщений
                 update_stats_messages(chat_id, chat_name)
 
-            # Автоотчёт раз в минуту (для теста)
-            if last_report_time is None or (datetime.datetime.now() - last_report_time).total_seconds() >= 60:
+            # тестовый автоотчёт раз в минуту
+            now = datetime.datetime.now()
+            if last_report_time is None or (now - last_report_time).total_seconds() >= 60:
                 make_weekly_report()
-                last_report_time = datetime.datetime.now()
+                last_report_time = now
 
             time.sleep(CHECK_INTERVAL)
         except Exception as e:
@@ -212,8 +220,8 @@ def callback():
         return CONFIRMATION_TOKEN
 
     elif data.get("type") == "message_new":
-        obj = data.get("object", {})
-        peer_id = obj.get("peer_id")
+        obj = data["object"]
+        peer_id = obj["peer_id"]
         chat_id = peer_id - 2000000000
         for chat_name, cid in CHATS.items():
             if cid == chat_id:
@@ -222,17 +230,16 @@ def callback():
 
     elif data.get("type") == "message_reaction_event":
         obj = data.get("object", {})
-        message_info = obj.get("message", {})
-        peer_id = message_info.get("peer_id")
-        user_id = obj.get("user_id")
-        reaction = obj.get("reaction")
-        event_type = obj.get("event_type")  # "reaction_add" или "reaction_remove"
+        peer_id = obj.get("peer_id")
+        user_id = obj.get("reacted_id")
+        reaction_id = obj.get("reaction_id")
+        event_type = "reaction_add"  # VK пока не присылает "remove"
 
-        if user_id and reaction and event_type and peer_id:
+        if peer_id and user_id and reaction_id:
             chat_id = peer_id - 2000000000
             for chat_name, cid in CHATS.items():
                 if cid == chat_id:
-                    handle_reaction_event(chat_name, user_id, reaction, event_type)
+                    handle_reaction_event(chat_name, user_id, str(reaction_id), event_type)
         return "ok"
 
     return "ok"
