@@ -11,7 +11,8 @@ VK_TOKEN = "vk1.a.reHQ5pJrSXaDax_ynpXzzcLTlfznehHS2E433giDDpjI35-jE8cV2XhquIJw7Y
 TELEGRAM_BOT_TOKEN = "8372192830:AAFQDZtkuZcOXLC80te4FeYd_wQKEoQ6fLo"
 TELEGRAM_CHAT_ID = "@test_prostor"
 CHECK_INTERVAL = 10  # секунд между проверками
-CONFIRMATION_TOKEN = "db79a8bd"  # токен, который VK прислал
+AUTO_REPORT_INTERVAL = 300  # автоотчёт каждые 5 минут
+CONFIRMATION_TOKEN = "db79a8bd"  # ваш confirmation token VK
 
 CHATS = {
     "Песочница": 9,
@@ -20,7 +21,6 @@ CHATS = {
 
 STATS_FILE = "weekly_stats.json"
 PREV_FILE = "previous_week.json"
-
 # ================================
 
 vk = VkApi(token=VK_TOKEN)
@@ -28,6 +28,7 @@ vk_api = vk.get_api()
 previous_members = {}
 
 app = Flask(__name__)
+last_report_time = None
 
 # ================= Функции ===================
 def send_telegram(message):
@@ -71,10 +72,7 @@ def update_stats_messages(chat_id, chat_name):
         offset = 0
         while True:
             history = vk_api.messages.getHistory(peer_id=2000000000 + chat_id, count=200, offset=offset)
-            if isinstance(history, dict):
-                messages = history.get("items", [])
-            else:
-                messages = []
+            messages = history.get("items", []) if isinstance(history, dict) else []
 
             if not messages:
                 break
@@ -98,7 +96,7 @@ def update_stats_messages(chat_id, chat_name):
         save_stats(stats)
 
 
-# ================= Обработка реакций ============
+# ================= Обработка реакций через callback-события ============
 def handle_reaction_event(chat_name, user_id, reaction, event_type):
     stats = load_stats()
     chat_stats = stats.get(chat_name, {"messages": {}, "reactions": {}, "totals": {"messages": 0, "reactions": 0}})
@@ -117,7 +115,7 @@ def handle_reaction_event(chat_name, user_id, reaction, event_type):
     save_stats(stats)
 
 
-# ================= Формирование отчета ============
+# ================= Формирование отчета =========
 def make_weekly_report(reset=True):
     stats = load_stats()
     try:
@@ -140,13 +138,12 @@ def make_weekly_report(reset=True):
         for uid, count in top_msgs:
             msg += f"- {get_user_name(uid)} — {count}\n"
 
-        # топ по реакциям
+        # топ по реакциям (без разбивки по типам)
         total_reacts_by_user = {uid: sum(emoji_counts.values()) for uid, emoji_counts in chat_stats["reactions"].items()}
         top_reacts = sorted(total_reacts_by_user.items(), key=lambda x: x[1], reverse=True)[:10]
         msg += "<b>Топ-10 по реакциям:</b>\n"
         for uid, count in top_reacts:
-            breakdown = ", ".join([f"{emoji} {c}" for emoji, c in chat_stats["reactions"][uid].items()])
-            msg += f"- {get_user_name(uid)} — {count} ({breakdown})\n"
+            msg += f"- {get_user_name(uid)} — {count}\n"
 
         # сравнение с прошлым
         prev_msgs = prev.get(chat_name, {}).get("totals", {}).get("messages", 0)
@@ -167,8 +164,7 @@ def make_weekly_report(reset=True):
         print("Ошибка при отправке отчёта:", e)
 
 
-# ================= Основной цикл ====================
-last_report_time = None
+# ================= Основной цикл =================
 def bot_loop():
     global last_report_time
     for chat_name, chat_id in CHATS.items():
@@ -199,9 +195,9 @@ def bot_loop():
                 # обновляем статистику сообщений
                 update_stats_messages(chat_id, chat_name)
 
-            # тестовый автоотчёт раз в минуту
+            # автоотчёт каждые 5 минут
             now = datetime.datetime.now()
-            if last_report_time is None or (now - last_report_time).total_seconds() >= 60:
+            if last_report_time is None or (now - last_report_time).total_seconds() >= AUTO_REPORT_INTERVAL:
                 make_weekly_report()
                 last_report_time = now
 
@@ -229,17 +225,17 @@ def callback():
         return "ok"
 
     elif data.get("type") == "message_reaction_event":
-        obj = data.get("object", {})
+        obj = data["object"]
         peer_id = obj.get("peer_id")
+        if peer_id is None:
+            return "ok"
+        chat_id = peer_id - 2000000000
         user_id = obj.get("reacted_id")
-        reaction_id = obj.get("reaction_id")
-        event_type = "reaction_add"  # VK пока не присылает "remove"
-
-        if peer_id and user_id and reaction_id:
-            chat_id = peer_id - 2000000000
-            for chat_name, cid in CHATS.items():
-                if cid == chat_id:
-                    handle_reaction_event(chat_name, user_id, str(reaction_id), event_type)
+        reaction = str(obj.get("reaction_id"))
+        event_type = "reaction_add"  # VK callback для добавления/удаления реакции
+        for chat_name, cid in CHATS.items():
+            if cid == chat_id and user_id is not None:
+                handle_reaction_event(chat_name, user_id, reaction, event_type)
         return "ok"
 
     return "ok"
@@ -250,6 +246,7 @@ Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
 
 
