@@ -197,10 +197,11 @@ def bot_loop():
                 update_stats_messages(chat_id, chat_name)
 
             # автоотчёт раз в неделю — пятница 18:00
-            now = datetime.datetime.now()
-            if now.weekday() == 4 and now.hour == 18 and now.minute < CHECK_INTERVAL:
+            # тестовый автоотчёт каждые 10 минут
+            if last_report_time is None or (datetime.datetime.now() - last_report_time).total_seconds() >= 600:
                 make_weekly_report()
-                time.sleep(60)
+                last_report_time = datetime.datetime.now()
+
 
             time.sleep(CHECK_INTERVAL)
         except Exception as e:
@@ -245,5 +246,6 @@ Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
 
