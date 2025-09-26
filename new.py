@@ -130,9 +130,10 @@ def build_report(reset=True, weekly=False):
 
         # Топ сообщений
         top_msgs = sorted(chat_stats["messages"].items(), key=lambda x: x[1], reverse=True)[:10]
-        msg += "  📝 <b>Топ-10 по сообщениям:</b>\n"
-        for uid, count in top_msgs:
-            msg += f"    - {get_user_name(uid)} — {count}\n"
+        if top_msgs:
+            msg += "  📝 <b>Топ-10 по сообщениям:</b>\n"
+            for uid, count in top_msgs:
+                msg += f"    - {get_user_name(uid)} — {count}\n"
 
         # Топ реакций
         total_reacts_by_user = {}
@@ -141,10 +142,11 @@ def build_report(reset=True, weekly=False):
                 for uid in users_set:
                     total_reacts_by_user[uid] = total_reacts_by_user.get(uid, 0) + 1
 
-        top_reacts = sorted(total_reacts_by_user.items(), key=lambda x: x[1], reverse=True)[:10]
-        msg += "\n  ❤️ <b>Топ-10 по реакциям:</b>\n"
-        for uid, count in top_reacts:
-            msg += f"    - {get_user_name(uid)} — {count}\n"
+        if total_reacts_by_user:
+            top_reacts = sorted(total_reacts_by_user.items(), key=lambda x: x[1], reverse=True)[:10]
+            msg += "\n  ❤️ <b>Топ-10 по реакциям:</b>\n"
+            for uid, count in top_reacts:
+                msg += f"    - {get_user_name(uid)} — {count}\n"
 
         # Сравнение с прошлой неделей
         if weekly:
@@ -258,7 +260,11 @@ def callback():
         message_id = obj.get("message_id")
         user_id = obj.get("reacted_id")
         reaction = str(obj.get("reaction_id"))
-        event_type = "reaction_add"
+        
+        event_type = obj.get("event_type")  # 'reaction_add' или 'reaction_remove'
+        if event_type not in ["reaction_add", "reaction_remove"]:
+            return "ok"
+        
         for chat_name, cid in CHATS.items():
             if cid == chat_id and user_id is not None:
                 handle_reaction_event(chat_name, message_id, user_id, reaction, event_type)
@@ -272,7 +278,7 @@ def report_scheduler():
     while True:
         try:
             now = datetime.datetime.now(tz)
-            if now.weekday() == 4 and now.hour == 23 and now.minute == 50:
+            if now.weekday() == 4 and now.hour == 23 and now.minute == 55:
                 print("Время еженедельного отчёта! Генерирую...")
                 Thread(target=make_weekly_report).start()
                 time.sleep(60)
@@ -289,4 +295,5 @@ Thread(target=report_scheduler, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
