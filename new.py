@@ -4,6 +4,7 @@ import datetime
 from threading import Thread
 from vk_api import VkApi
 from flask import Flask, request
+import pytz   # для московского времени
 
 # ========== Настройки ==========
 VK_TOKEN = "vk1.a.reHQ5pJrSXaDax_ynpXzzcLTlfznehHS2E433giDDpjI35-jE8cV2XhquIJw7YOQ9NgS_zBV7eRXNNrHwsF7Zg7b-5AG7vChlfoIHLXJ7fhIxeY9La7f3VN-m2WrmK_SA43yYvGefJVag2AkBHRz9lTgJvChygoSxDxd8IcM1YuBxAy-zakRcZHDMojwM52helu67r2cEu3XFHAMjlJxZQ"
@@ -23,6 +24,7 @@ vk_api = vk.get_api()
 previous_members = {}
 user_cache = {}
 stats = {chat_name: {"messages": {}, "reactions": {}, "totals": {"messages": 0, "reactions": 0}} for chat_name in CHATS}
+previous_week_stats = {chat_name: {"messages": 0, "reactions": 0} for chat_name in CHATS}
 
 app = Flask(__name__)
 
@@ -81,14 +83,11 @@ def handle_reaction_event(chat_name, user_id, reaction, event_type):
 
 def update_reactions(chat_id, chat_name):
     try:
-        # Получаем последние 100 сообщений
         history = vk_api.messages.getHistory(peer_id=2000000000 + chat_id, count=100)
         messages = history.get('items', [])
 
         for message in messages:
             message_id = message['id']
-
-            # Получаем реакции для сообщения
             reactions_response = vk_api.messages.getMessagesReactions(
                 peer_id=2000000000 + chat_id,
                 message_ids=[message_id],
@@ -105,14 +104,18 @@ def update_reactions(chat_id, chat_name):
     except Exception as e:
         print(f"Ошибка при обновлении реакций в чате {chat_name}: {e}")
 
-def make_weekly_report():
-    msg = "📊 <b>Статистика за неделю</b>\n\n"
+# ================= Формирование отчётов =================
+def build_report(reset=True, weekly=False):
+    msg = "📊 <b>Статистика</b>\n\n"
 
     for chat_name in CHATS:
         chat_stats = stats[chat_name]
+        total_msgs = chat_stats['totals']['messages']
+        total_reacts = chat_stats['totals']['reactions']
+
         msg += f"📌 <b>{chat_name}</b>\n"
-        msg += f"  Всего сообщений: {chat_stats['totals']['messages']}\n"
-        msg += f"  Всего реакций: {chat_stats['totals']['reactions']}\n\n"
+        msg += f"  Всего сообщений: {total_msgs}\n"
+        msg += f"  Всего реакций: {total_reacts}\n\n"
 
         top_msgs = sorted(chat_stats["messages"].items(), key=lambda x: x[1], reverse=True)[:10]
         msg += "  📝 <b>Топ-10 по сообщениям:</b>\n"
@@ -125,13 +128,37 @@ def make_weekly_report():
         for uid, count in top_reacts:
             msg += f"    - {get_user_name(uid)} — {count}\n"
 
+        if weekly:
+            prev = previous_week_stats.get(chat_name, {"messages": 0, "reactions": 0})
+            delta_msgs = 0.0
+            delta_reacts = 0.0
+            if prev["messages"] > 0:
+                delta_msgs = (total_msgs - prev["messages"]) / prev["messages"] * 100
+            if prev["reactions"] > 0:
+                delta_reacts = (total_reacts - prev["reactions"]) / prev["reactions"] * 100
+            msg += f"\nСообщений больше на {delta_msgs:.1f}%\n"
+            msg += f"Реакций больше на {delta_reacts:.1f}%\n"
+
         msg += "\n" + "―" * 30 + "\n\n"
 
     send_telegram(msg)
 
-    # Сброс статистики после отчёта
-    for chat_name in CHATS:
-        stats[chat_name] = {"messages": {}, "reactions": {}, "totals": {"messages": 0, "reactions": 0}}
+    if weekly:
+        for chat_name in CHATS:
+            previous_week_stats[chat_name] = {
+                "messages": stats[chat_name]["totals"]["messages"],
+                "reactions": stats[chat_name]["totals"]["reactions"]
+            }
+
+    if reset:
+        for chat_name in CHATS:
+            stats[chat_name] = {"messages": {}, "reactions": {}, "totals": {"messages": 0, "reactions": 0}}
+
+def make_weekly_report():
+    build_report(reset=True, weekly=True)
+
+def make_interim_report():
+    build_report(reset=False, weekly=False)
 
 # ================= Основной цикл VK =================
 def bot_loop():
@@ -157,8 +184,6 @@ def bot_loop():
                     send_telegram(f"➖ {name} ({vk_link}) покинул '{chat_name}'.")
 
                 previous_members[chat_name] = current_members
-
-                # Обновляем реакции для последних 100 сообщений
                 update_reactions(chat_id, chat_name)
 
             time.sleep(CHECK_INTERVAL)
@@ -182,13 +207,13 @@ def telegram_polling():
                 if message:
                     text = message.get("text", "")
                     if text == "/report":
-                        send_telegram("Генерирую отчёт...")
-                        Thread(target=make_weekly_report).start()
+                        send_telegram("Генерирую промежуточный отчёт...")
+                        Thread(target=make_interim_report).start()
         except Exception as e:
             print("Ошибка Telegram polling:", e)
             time.sleep(5)
 
-# ================= Flask Callback API для реакций =================
+# ================= Flask Callback API =================
 @app.route("/", methods=["POST"])
 def callback():
     data = request.get_json()
@@ -221,12 +246,26 @@ def callback():
 
     return "ok"
 
+# ================= Планировщик отчётов =================
+def report_scheduler():
+    tz = pytz.timezone("Europe/Moscow")
+    while True:
+        try:
+            now = datetime.datetime.now(tz)
+            if now.weekday() == 4 and now.hour == 23 and now.minute == 40:
+                print("Время отчёта! Отправляю...")
+                Thread(target=make_weekly_report).start()
+                time.sleep(60)
+            else:
+                time.sleep(20)
+        except Exception as e:
+            print("Ошибка в планировщике отчётов:", e)
+            time.sleep(60)
+
 # ================= Запуск =================
 Thread(target=bot_loop, daemon=True).start()
 Thread(target=telegram_polling, daemon=True).start()
+Thread(target=report_scheduler, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
-
-
-
