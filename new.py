@@ -4,7 +4,7 @@ import datetime
 from threading import Thread
 from vk_api import VkApi
 from flask import Flask, request
-from zoneinfo import ZoneInfo   # встроенный модуль для часовых поясов
+from zoneinfo import ZoneInfo
 
 # ========== Настройки ==========
 VK_TOKEN = "vk1.a.reHQ5pJrSXaDax_ynpXzzcLTlfznehHS2E433giDDpjI35-jE8cV2XhquIJw7YOQ9NgS_zBV7eRXNNrHwsF7Zg7b-5AG7vChlfoIHLXJ7fhIxeY9La7f3VN-m2WrmK_SA43yYvGefJVag2AkBHRz9lTgJvChygoSxDxd8IcM1YuBxAy-zakRcZHDMojwM52helu67r2cEu3XFHAMjlJxZQ"
@@ -88,29 +88,6 @@ def handle_reaction_event(chat_name, message_id, user_id, reaction, event_type):
             users_set.remove(user_id)
             chat_stats["totals"]["reactions"] = max(chat_stats["totals"]["reactions"] - 1, 0)
 
-def update_reactions(chat_id, chat_name):
-    try:
-        history = vk_api.messages.getHistory(peer_id=2000000000 + chat_id, count=100)
-        messages = history.get('items', [])
-
-        for message in messages:
-            message_id = message['id']
-            reactions_response = vk_api.messages.getMessagesReactions(
-                peer_id=2000000000 + chat_id,
-                message_ids=[message_id],
-                extended=1
-            )
-
-            items = reactions_response.get('items', [])
-            for item in items:
-                for reaction in item.get('reactions', []):
-                    users = reaction.get('users', [])
-                    for user_id in users:
-                        handle_reaction_event(chat_name, message_id, user_id, reaction['reaction'], 'reaction_add')
-
-    except Exception as e:
-        print(f"Ошибка при обновлении реакций в чате {chat_name}: {e}")
-
 # ================= Формирование отчётов =================
 def build_report(reset=True, weekly=False):
     if weekly:
@@ -128,13 +105,11 @@ def build_report(reset=True, weekly=False):
         msg += f"  Всего сообщений: {total_msgs}\n"
         msg += f"  Всего реакций: {total_reacts}\n\n"
 
-        # Топ сообщений
         top_msgs = sorted(chat_stats["messages"].items(), key=lambda x: x[1], reverse=True)[:10]
         msg += "  📝 <b>Топ-10 по сообщениям:</b>\n"
         for uid, count in top_msgs:
             msg += f"    - {get_user_name(uid)} — {count}\n"
 
-        # Топ реакций
         total_reacts_by_user = {}
         for reactions_by_msg in chat_stats["reactions"].values():
             for users_set in reactions_by_msg.values():
@@ -146,7 +121,6 @@ def build_report(reset=True, weekly=False):
         for uid, count in top_reacts:
             msg += f"    - {get_user_name(uid)} — {count}\n"
 
-        # Сравнение с прошлой неделей
         if weekly:
             prev = previous_week_stats.get(chat_name, {"messages": 0, "reactions": 0})
             delta_msgs = 0.0
@@ -203,8 +177,6 @@ def bot_loop():
                     send_telegram(f"➖ {name} ({vk_link}) покинул '{chat_name}'.")
 
                 previous_members[chat_name] = current_members
-                update_reactions(chat_id, chat_name)
-
             time.sleep(CHECK_INTERVAL)
         except Exception as e:
             print("Ошибка VK loop:", e)
@@ -232,7 +204,7 @@ def telegram_polling():
             print("Ошибка Telegram polling:", e)
             time.sleep(5)
 
-# ================= Flask Callback API =================
+# ================= Flask Callback API с реакциями =================
 @app.route("/", methods=["POST"])
 def callback():
     data = request.get_json()
@@ -254,14 +226,44 @@ def callback():
         peer_id = obj.get("peer_id")
         if peer_id is None:
             return "ok"
+
         chat_id = peer_id - 2000000000
-        message_id = obj.get("message_id")
-        user_id = obj.get("reacted_id")
+        message_id = obj.get("cmid") or obj.get("message_id")
         reaction = str(obj.get("reaction_id"))
-        event_type = "reaction_add"
+
+        try:
+            reactions_response = vk_api.messages.getMessagesReactions(
+                peer_id=peer_id,
+                message_ids=[message_id],
+                extended=1
+            )
+            items = reactions_response.get('items', [])
+            vk_users = set()
+            if items:
+                for r in items[0].get('reactions', []):
+                    if str(r['reaction']) == reaction:
+                        vk_users.update(r.get('users', []))
+                        break
+        except Exception as e:
+            print(f"Ошибка получения реакций от VK: {e}")
+            return "ok"
+
         for chat_name, cid in CHATS.items():
-            if cid == chat_id and user_id is not None:
-                handle_reaction_event(chat_name, message_id, user_id, reaction, event_type)
+            if cid != chat_id:
+                continue
+            if message_id not in stats[chat_name]["reactions"]:
+                stats[chat_name]["reactions"][message_id] = {}
+            if reaction not in stats[chat_name]["reactions"][message_id]:
+                stats[chat_name]["reactions"][message_id][reaction] = set()
+
+            local_users = stats[chat_name]["reactions"][message_id][reaction]
+
+            for user_id in vk_users - local_users:
+                handle_reaction_event(chat_name, message_id, user_id, reaction, "reaction_add")
+
+            for user_id in local_users - vk_users:
+                handle_reaction_event(chat_name, message_id, user_id, reaction, "reaction_remove")
+
         return "ok"
 
     return "ok"
@@ -272,7 +274,7 @@ def report_scheduler():
     while True:
         try:
             now = datetime.datetime.now(tz)
-            if now.weekday() == 4 and now.hour == 18 and now.minute == 00:
+            if now.weekday() == 4 and now.hour == 18 and now.minute == 0:
                 print("Время еженедельного отчёта! Генерирую...")
                 Thread(target=make_weekly_report).start()
                 time.sleep(60)
@@ -289,6 +291,3 @@ Thread(target=report_scheduler, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
-
-
-
