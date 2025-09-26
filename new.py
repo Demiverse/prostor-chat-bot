@@ -4,7 +4,7 @@ import datetime
 from threading import Thread
 from vk_api import VkApi
 from flask import Flask, request
-import pytz   # для московского времени
+from zoneinfo import ZoneInfo   # встроенный модуль для часовых поясов
 
 # ========== Настройки ==========
 VK_TOKEN = "vk1.a.reHQ5pJrSXaDax_ynpXzzcLTlfznehHS2E433giDDpjI35-jE8cV2XhquIJw7YOQ9NgS_zBV7eRXNNrHwsF7Zg7b-5AG7vChlfoIHLXJ7fhIxeY9La7f3VN-m2WrmK_SA43yYvGefJVag2AkBHRz9lTgJvChygoSxDxd8IcM1YuBxAy-zakRcZHDMojwM52helu67r2cEu3XFHAMjlJxZQ"
@@ -106,7 +106,10 @@ def update_reactions(chat_id, chat_name):
 
 # ================= Формирование отчётов =================
 def build_report(reset=True, weekly=False):
-    msg = "📊 <b>Статистика</b>\n\n"
+    if weekly:
+        msg = "📊 <b>Статистика за неделю</b>\n\n"
+    else:
+        msg = "⚡️ <b>Промежуточная статистика</b>\n\n"
 
     for chat_name in CHATS:
         chat_stats = stats[chat_name]
@@ -248,7 +251,7 @@ def callback():
 
 # ================= Планировщик отчётов =================
 def report_scheduler():
-    tz = pytz.timezone("Europe/Moscow")
+    tz = ZoneInfo("Europe/Moscow")
     while True:
         try:
             now = datetime.datetime.now(tz)
@@ -269,3 +272,4 @@ Thread(target=report_scheduler, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
