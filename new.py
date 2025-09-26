@@ -68,18 +68,25 @@ def update_stats_message(chat_name, user_id):
     chat_stats["messages"][user_str] = chat_stats["messages"].get(user_str, 0) + 1
     chat_stats["totals"]["messages"] += 1
 
-def handle_reaction_event(chat_name, user_id, reaction, event_type):
+def handle_reaction_event(chat_name, message_id, user_id, reaction, event_type):
     chat_stats = stats[chat_name]
-    user_str = str(user_id)
-    if user_str not in chat_stats["reactions"]:
-        chat_stats["reactions"][user_str] = {}
+
+    if message_id not in chat_stats["reactions"]:
+        chat_stats["reactions"][message_id] = {}
+
+    if reaction not in chat_stats["reactions"][message_id]:
+        chat_stats["reactions"][message_id][reaction] = set()
+
+    users_set = chat_stats["reactions"][message_id][reaction]
 
     if event_type == "reaction_add":
-        chat_stats["reactions"][user_str][reaction] = chat_stats["reactions"][user_str].get(reaction, 0) + 1
-        chat_stats["totals"]["reactions"] += 1
+        if user_id not in users_set:
+            users_set.add(user_id)
+            chat_stats["totals"]["reactions"] += 1
     elif event_type == "reaction_remove":
-        chat_stats["reactions"][user_str][reaction] = max(chat_stats["reactions"][user_str].get(reaction, 1) - 1, 0)
-        chat_stats["totals"]["reactions"] = max(chat_stats["totals"]["reactions"] - 1, 0)
+        if user_id in users_set:
+            users_set.remove(user_id)
+            chat_stats["totals"]["reactions"] = max(chat_stats["totals"]["reactions"] - 1, 0)
 
 def update_reactions(chat_id, chat_name):
     try:
@@ -99,7 +106,7 @@ def update_reactions(chat_id, chat_name):
                 for reaction in item.get('reactions', []):
                     users = reaction.get('users', [])
                     for user_id in users:
-                        handle_reaction_event(chat_name, user_id, reaction['reaction'], 'reaction_add')
+                        handle_reaction_event(chat_name, message_id, user_id, reaction['reaction'], 'reaction_add')
 
     except Exception as e:
         print(f"Ошибка при обновлении реакций в чате {chat_name}: {e}")
@@ -107,6 +114,7 @@ def update_reactions(chat_id, chat_name):
 # ================= Формирование отчётов =================
 def build_report(reset=True, weekly=False):
     if weekly:
+        send_telegram("Генерирую отчёт по неделе...")
         msg = "📊 <b>Статистика за неделю</b>\n\n"
     else:
         msg = "⚡️ <b>Промежуточная статистика</b>\n\n"
@@ -120,17 +128,25 @@ def build_report(reset=True, weekly=False):
         msg += f"  Всего сообщений: {total_msgs}\n"
         msg += f"  Всего реакций: {total_reacts}\n\n"
 
+        # Топ сообщений
         top_msgs = sorted(chat_stats["messages"].items(), key=lambda x: x[1], reverse=True)[:10]
         msg += "  📝 <b>Топ-10 по сообщениям:</b>\n"
         for uid, count in top_msgs:
             msg += f"    - {get_user_name(uid)} — {count}\n"
 
-        total_reacts_by_user = {uid: sum(emoji_counts.values()) for uid, emoji_counts in chat_stats["reactions"].items()}
+        # Топ реакций
+        total_reacts_by_user = {}
+        for reactions_by_msg in chat_stats["reactions"].values():
+            for users_set in reactions_by_msg.values():
+                for uid in users_set:
+                    total_reacts_by_user[uid] = total_reacts_by_user.get(uid, 0) + 1
+
         top_reacts = sorted(total_reacts_by_user.items(), key=lambda x: x[1], reverse=True)[:10]
         msg += "\n  ❤️ <b>Топ-10 по реакциям:</b>\n"
         for uid, count in top_reacts:
             msg += f"    - {get_user_name(uid)} — {count}\n"
 
+        # Сравнение с прошлой неделей
         if weekly:
             prev = previous_week_stats.get(chat_name, {"messages": 0, "reactions": 0})
             delta_msgs = 0.0
@@ -239,12 +255,13 @@ def callback():
         if peer_id is None:
             return "ok"
         chat_id = peer_id - 2000000000
+        message_id = obj.get("message_id")
         user_id = obj.get("reacted_id")
         reaction = str(obj.get("reaction_id"))
         event_type = "reaction_add"
         for chat_name, cid in CHATS.items():
             if cid == chat_id and user_id is not None:
-                handle_reaction_event(chat_name, user_id, reaction, event_type)
+                handle_reaction_event(chat_name, message_id, user_id, reaction, event_type)
         return "ok"
 
     return "ok"
@@ -255,8 +272,8 @@ def report_scheduler():
     while True:
         try:
             now = datetime.datetime.now(tz)
-            if now.weekday() == 4 and now.hour == 23 and now.minute == 40:
-                print("Время отчёта! Отправляю...")
+            if now.weekday() == 4 and now.hour == 23 and now.minute == 50:
+                print("Время еженедельного отчёта! Генерирую...")
                 Thread(target=make_weekly_report).start()
                 time.sleep(60)
             else:
