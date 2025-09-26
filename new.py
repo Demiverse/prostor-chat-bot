@@ -10,7 +10,7 @@ VK_TOKEN = "vk1.a.reHQ5pJrSXaDax_ynpXzzcLTlfznehHS2E433giDDpjI35-jE8cV2XhquIJw7Y
 TELEGRAM_BOT_TOKEN = "8018843975:AAFwPpPKDSn__AMlPjl-AAcnOb-cc-hSpFQ"
 TELEGRAM_CHAT_ID = "@testprostor"
 CHECK_INTERVAL = 10
-CONFIRMATION_TOKEN = "db79a8bd"
+CONFIRMATION_TOKEN = "a7b2fe10"
 
 CHATS = {
     "Песочница": 9,
@@ -227,5 +227,6 @@ Thread(target=telegram_polling, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
 
