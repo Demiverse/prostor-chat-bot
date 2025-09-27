@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 VK_TOKEN = "vk1.a.reHQ5pJrSXaDax_ynpXzzcLTlfznehHS2E433giDDpjI35-jE8cV2XhquIJw7YOQ9NgS_zBV7eRXNNrHwsF7Zg7b-5AG7vChlfoIHLXJ7fhIxeY9La7f3VN-m2WrmK_SA43yYvGefJVag2AkBHRz9lTgJvChygoSxDxd8IcM1YuBxAy-zakRcZHDMojwM52helu67r2cEu3XFHAMjlJxZQ"
 TELEGRAM_BOT_TOKEN = "8018843975:AAFwPpPKDSn__AMlPjl-AAcnOb-cc-hSpFQ"
 TELEGRAM_CHAT_ID = "@info_chat_prostor"
-CONFIRMATION_TOKEN = "a0516acf"
+CONFIRMATION_TOKEN = "7a4be057"
 
 CHATS = {"Песочница": 9, "Мидлы": 10}
 
@@ -329,6 +329,7 @@ if __name__ == "__main__":
     print("Бот запущен. Еженедельный отчёт собирается в пятницу 18:00. Отслеживание VK активно.")
     # Flask сервер
     app.run(host="0.0.0.0", port=8080)
+
 
 
 
